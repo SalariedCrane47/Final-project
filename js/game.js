@@ -99,7 +99,7 @@ class Chunk {
       for (let x = 0; x < this.size; x++) {
         const worldX = this.#chunkX * this.size + x;
         const worldY = this.#chunkY * this.size + y;
-        const value = fbm(worldX * 0.03, worldY * 0.03, noise, 8, 2.1, 0.45);
+        const value = fbm(worldX * 0.01, worldY * 0.01, noise);
         tiles[y][x] = value;
       }
     }
@@ -135,7 +135,7 @@ class Terrain {
     this.#tileSize = tileSize;
     this.#chunkSize = chunkSize;
     this.#noise = noise;
-    this.#chunks = new Map(); // Key: `${chunkX},${chunkY}`
+    this.#chunks = new Map();
   }
 
   getChunk(chunkX, chunkY) {
@@ -151,8 +151,8 @@ class Terrain {
     const norm = (value + 1) / 2;
     if (norm < 0.43) return "#3366cc"; // Water
     else if (norm < 0.45) return "#e2ca76"; // Sand
-    else if (norm < 0.48) return "#996633"; // Grass
-    else if (norm < 0.65) return "#669933"; // Dirt
+    else if (norm < 0.48) return "#996633"; // Dirt
+    else if (norm < 0.65) return "#669933"; // Grass
     else if (norm < 0.75) return "#cccccc"; // Rock
     else return "#ffffff"; // Snow
   }
@@ -171,11 +171,11 @@ class Terrain {
   isPositionWalkable(x, y) {
     const value = this.getValue(x, y);
     const norm = (value + 1) / 2;
-    return norm >= 0.43; // Only walk on sand or higher
+    return norm >= 0.43 && norm <= 0.65;
   }
 
   draw(ctx, camera) {
-    const viewRadius = 3;
+    const viewRadius = 1;
     const camChunkX = Math.floor(camera.x / this.#chunkSize);
     const camChunkY = Math.floor(camera.y / this.#chunkSize);
 
@@ -215,24 +215,25 @@ class Entity {
 class Player extends Entity {
   #x;
   #y;
-  #atk;
 
   constructor(x, y) {
     super();
     this.#x = x;
     this.#y = y;
-    this.speed = 50;
-    this.#atk = 20;
+    this.speed = 300;
+    this.atk = 20;
+    this.angle = 0;
   }
 
   get x() {
     return this.#x;
   }
+
   get y() {
     return this.#y;
   }
 
-  update(deltaTime, terrain) {
+  update(deltaTime, terrain, mouseX, mouseY, camera) {
     const moveStep = (this.speed * deltaTime) / 1000;
     const newX = this.#x + (this.moveDir.x * moveStep) / TILE_SIZE;
     const newY = this.#y + (this.moveDir.y * moveStep) / TILE_SIZE;
@@ -241,71 +242,25 @@ class Player extends Entity {
       this.#x = newX;
       this.#y = newY;
     }
+
+    // Calculate angle toward mouse position
+    const screenX = (this.#x - camera.x) * TILE_SIZE + canvas.width / 2;
+    const screenY = (this.#y - camera.y) * TILE_SIZE + canvas.height / 2;
+    const dx = mouseX - screenX;
+    const dy = mouseY - screenY;
+    this.angle = Math.atan2(dy, dx);
   }
 
   draw(ctx, cameraX, cameraY) {
     const screenX = (this.#x - cameraX) * TILE_SIZE + canvas.width / 2;
     const screenY = (this.#y - cameraY) * TILE_SIZE + canvas.height / 2;
 
+    ctx.save();
+    ctx.translate(screenX, screenY);
+    ctx.rotate(this.angle);
     ctx.fillStyle = "red";
-    ctx.fillRect(
-      screenX - TILE_SIZE / 2,
-      screenY - TILE_SIZE / 2,
-      TILE_SIZE,
-      TILE_SIZE
-    );
-  }
-}
-
-class Bullet extends Entity {}
-
-// ==== MONSTER CLASS ====
-class Monster extends Entity {
-  #x;
-  #y;
-
-  constructor(x, y) {
-    super();
-    this.#x = x;
-    this.#y = y;
-    this.speed = 20;
-  }
-
-  get x() {
-    return this.#x;
-  }
-  get y() {
-    return this.#y;
-  }
-
-  update(deltaTime, terrain) {
-    const moveStep = (this.speed * deltaTime) / 1000;
-    const newX = this.#x + (this.moveDir.x * moveStep) / TILE_SIZE;
-    const newY = this.#y + (this.moveDir.y * moveStep) / TILE_SIZE;
-    const dx = this.targetX - this.#x;
-    const dy = this.targetY - this.#y;
-    const length = Math.hypot(dx, dy);
-    if (length > 0.1) {
-      this.moveDir.x = dx / length;
-      this.moveDir.y = dy / length;
-    }
-
-    if (terrain.isPositionWalkable(newX, newY)) {
-      this.#x = newX;
-      this.#y = newY;
-    }
-  }
-  draw(ctx, cameraX, cameraY) {
-    const screenX = (this.#x - cameraX) * TILE_SIZE + canvas.width / 2;
-    const screenY = (this.#y - cameraY) * TILE_SIZE + canvas.height / 2;
-
-    ctx.fillStyle = "green";
-    ctx.fillRect(
-      screenX - TILE_SIZE / 2,
-      screenY - TILE_SIZE / 2,
-      TILE_SIZE,
-      TILE_SIZE
-    );
+    ctx.fillRect(-TILE_SIZE / 2, -TILE_SIZE / 2, TILE_SIZE, TILE_SIZE);
+    ctx.restore();
   }
 }
 
@@ -341,7 +296,6 @@ class Game {
     this.noise = new ImprovedNoise();
     this.terrain = new Terrain(TILE_SIZE, 16, this.noise);
     this.player = new Player(0, 0);
-    this.monster = new Monster(10, 10);
     this.camera = new Camera();
     this.bindKeys();
     this.lastTime = performance.now();
@@ -366,22 +320,30 @@ class Game {
       if (e.key === "d" && this.player.moveDir.x === 1)
         this.player.moveDir.x = 0;
     });
+
+    this.mouse = { x: 0, y: 0 };
+
+    canvas.addEventListener("mousemove", (e) => {
+      this.mouse.x = e.clientX;
+      this.mouse.y = e.clientY;
+    });
   }
 
   loop(now) {
     const deltaTime = now - this.lastTime;
     this.lastTime = now;
-    this.player.update(deltaTime, this.terrain);
-    this.monster.targetX = this.player.x;
-    this.monster.targetY = this.player.y;
-    this.monster.update(deltaTime, this.terrain);
+    this.player.update(
+      deltaTime,
+      this.terrain,
+      this.mouse.x,
+      this.mouse.y,
+      this.camera
+    );
     this.camera.follow(this.player.x, this.player.y, deltaTime);
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     this.terrain.draw(ctx, this.camera);
     this.player.draw(ctx, this.camera.x, this.camera.y);
-    this.monster.draw(ctx, this.camera.x, this.camera.y);
-
     requestAnimationFrame(this.loop.bind(this));
   }
 }
